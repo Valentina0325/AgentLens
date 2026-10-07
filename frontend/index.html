@@ -1,0 +1,396 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AgentLens · Agent 调用链可观测与成本预测</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%235b6ee8'/%3E%3Crect x='7' y='16' width='4' height='9' rx='1.5' fill='%23fff'/%3E%3Crect x='14' y='11' width='4' height='14' rx='1.5' fill='%23fff'/%3E%3Crect x='21' y='7' width='4' height='18' rx='1.5' fill='%23fff'/%3E%3C/svg%3E" />
+  <script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
+  <style>
+    :root {
+      --primary: #5b6ee8;
+      --primary-2: #8a5cf6;
+      --accent: #21c0a0;
+      --warn: #f5576c;
+      --bg: #eef1f8;
+      --card: #ffffff;
+      --ink: #1f2a44;
+      --muted: #8a94a6;
+      --line: #eef0f6;
+      --shadow: 0 6px 22px rgba(43, 62, 110, 0.08);
+      --shadow-lg: 0 10px 34px rgba(43, 62, 110, 0.14);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      background: linear-gradient(180deg, #eaf0fb 0%, #f6f8fc 240px, #f6f8fc 100%);
+      color: var(--ink);
+      min-height: 100vh;
+    }
+    header {
+      background: linear-gradient(120deg, var(--primary) 0%, var(--primary-2) 100%);
+      color: #fff;
+      padding: 18px 28px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      box-shadow: var(--shadow-lg);
+      position: sticky;
+      top: 0;
+      z-index: 10;
+    }
+    header .brand { display: flex; align-items: center; gap: 12px; }
+    header .logo {
+      width: 38px; height: 38px; border-radius: 10px;
+      background: rgba(255,255,255,.18);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 20px;
+    }
+    header h1 { font-size: 19px; margin: 0; font-weight: 700; letter-spacing: .3px; }
+    header .sub { font-size: 12px; opacity: .8; margin-top: 3px; }
+    .refresh-btn {
+      background: rgba(255,255,255,.16);
+      color: #fff; border: 1px solid rgba(255,255,255,.35);
+      border-radius: 10px; padding: 9px 18px; font-size: 14px; cursor: pointer;
+      backdrop-filter: blur(4px); transition: all .2s ease;
+      display: flex; align-items: center; gap: 6px; font-weight: 600;
+    }
+    .refresh-btn:hover { background: rgba(255,255,255,.28); transform: translateY(-1px); }
+    .refresh-btn:active { transform: translateY(0); }
+    .header-actions { display: flex; align-items: center; gap: 10px; }
+    .model-select {
+      background: rgba(255,255,255,.12);
+      color: #fff; border: 1px solid rgba(255,255,255,.3);
+      border-radius: 10px; padding: 9px 14px; font-size: 14px; cursor: pointer;
+      backdrop-filter: blur(4px); transition: all .2s ease; font-weight: 600;
+      max-width: 220px;
+    }
+    .model-select:hover { background: rgba(255,255,255,.24); }
+    .model-select option { color: #1f2a44; }
+    .docs-btn {
+      background: rgba(255,255,255,.12);
+      color: #fff; border: 1px solid rgba(255,255,255,.3);
+      border-radius: 10px; padding: 9px 16px; font-size: 14px; cursor: pointer;
+      backdrop-filter: blur(4px); transition: all .2s ease;
+      display: flex; align-items: center; gap: 6px; font-weight: 600;
+      text-decoration: none;
+    }
+    .docs-btn:hover { background: rgba(255,255,255,.24); transform: translateY(-1px); color: #fff; }
+    .container { max-width: 1200px; margin: 24px auto; padding: 0 18px; }
+
+    .banner {
+      background: linear-gradient(90deg, #fff1f0, #ffe7e3);
+      color: #cf1322; border: 1px solid #ffccc7;
+      padding: 12px 16px; border-radius: 12px; margin-bottom: 18px;
+      font-size: 14px; display: none; box-shadow: var(--shadow);
+    }
+    .banner.error { background: linear-gradient(90deg,#fff2f0,#ffe2de); color:#d4380d; border-color:#ffb3a8; }
+
+    .cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; margin-bottom: 18px; }
+    .card {
+      background: var(--card); border-radius: 16px; padding: 20px 22px;
+      box-shadow: var(--shadow); position: relative; overflow: hidden;
+      border: 1px solid rgba(255,255,255,.6);
+    }
+    .card::before {
+      content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 5px;
+      background: linear-gradient(180deg, var(--primary), var(--primary-2));
+    }
+    .card:nth-child(2)::before { background: linear-gradient(180deg, var(--accent), #2bd4b0); }
+    .card:nth-child(3)::before { background: linear-gradient(180deg, #ffb648, #f57c2f); }
+    .card .label { font-size: 13px; color: var(--muted); font-weight: 600; }
+    .card .value { font-size: 26px; font-weight: 800; margin-top: 8px; letter-spacing: .5px; }
+    .card .value.warning { color: var(--warn); }
+
+    .charts { display: grid; grid-template-columns: 2fr 1fr; gap: 18px; margin-bottom: 18px; }
+    .panel {
+      background: var(--card); border-radius: 16px; padding: 16px 18px;
+      box-shadow: var(--shadow); border: 1px solid rgba(255,255,255,.6);
+    }
+    .panel h2 {
+      font-size: 15px; margin: 2px 8px 10px; font-weight: 700;
+      display: flex; align-items: center; gap: 8px;
+    }
+    .panel h2::before {
+      content: ""; width: 4px; height: 14px; border-radius: 2px;
+      background: linear-gradient(180deg, var(--primary), var(--primary-2));
+    }
+    .chart { width: 100%; height: 330px; }
+
+    .table-panel { background: var(--card); border-radius: 16px; padding: 16px 18px; box-shadow: var(--shadow); }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th, td { padding: 11px 10px; text-align: left; }
+    th { color: var(--muted); font-weight: 700; border-bottom: 2px solid var(--line); font-size: 12px; }
+    tbody tr { border-bottom: 1px solid var(--line); transition: background .15s ease; }
+    tbody tr:hover { background: #f7f9ff; }
+    tbody tr:nth-child(even) { background: #fafbff; }
+    tbody tr:nth-child(even):hover { background: #f2f5ff; }
+    .model-tag { font-weight: 600; color: var(--primary); }
+    .pill {
+      display: inline-block; padding: 3px 10px; border-radius: 999px;
+      font-size: 12px; font-weight: 600;
+    }
+    .pill-success { background: #e8f8f1; color: #1aa06d; }
+    .pill-error { background: #fdecea; color: #e0392b; }
+    .pill-timeout { background: #fff5e6; color: #d9820a; }
+    .cost { font-weight: 700; color: var(--ink); }
+
+    @media (max-width: 900px) {
+      .charts, .cards { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="brand">
+      <div class="logo">📊</div>
+      <div>
+        <h1>AgentLens</h1>
+        <div class="sub">Agent 调用链可观测与成本预测</div>
+      </div>
+    </div>
+    <div class="header-actions">
+      <select id="sourceSelect" class="model-select" title="按接入的项目/来源筛选监测数据（如 NEXUS_AI）" onchange="onSourceChange()">
+        <option value="">全部来源</option>
+      </select>
+      <select id="modelSelect" class="model-select" title="按接入的模型筛选监测数据" onchange="onModelChange()">
+        <option value="">全部模型</option>
+      </select>
+      <a class="docs-btn" href="/docs" target="_blank" title="打开 Swagger 文档，可在线填写参数、发送 POST 测试数据">
+        <span style="font-size:15px;line-height:1;">🔗</span> API 文档
+      </a>
+      <button class="refresh-btn" onclick="loadAll()">
+        <span style="font-size:16px;line-height:1;">↻</span> 刷新数据
+      </button>
+    </div>
+  </header>
+
+  <div class="container">
+    <div id="banner" class="banner"></div>
+
+    <div class="cards">
+      <div class="card">
+        <div class="label">预测日期</div>
+        <div class="value" id="predictedDate">—</div>
+      </div>
+      <div class="card">
+        <div class="label">预测成本（移动平均）</div>
+        <div class="value" id="predictedCost">—</div>
+      </div>
+      <div class="card">
+        <div class="label">预算阈值</div>
+        <div class="value" id="threshold">—</div>
+      </div>
+    </div>
+
+    <div class="charts">
+      <div class="panel">
+        <h2>成本趋势（含预测）</h2>
+        <div id="trendChart" class="chart"></div>
+      </div>
+      <div class="panel">
+        <h2>模型成本占比</h2>
+        <div id="pieChart" class="chart"></div>
+      </div>
+    </div>
+
+    <div class="table-panel">
+      <h2 style="font-size:15px;margin:2px 8px 12px;font-weight:700;">最近调用</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>模型</th><th>来源</th><th>输入 tokens</th><th>输出 tokens</th>
+            <th>成本</th><th>币种</th><th>延迟(ms)</th><th>状态</th><th>时间</th>
+          </tr>
+        </thead>
+        <tbody id="traceBody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <script>
+    const API = "";
+    const PIE_COLORS = ["#5b6ee8", "#21c0a0", "#ffb648", "#f5576c", "#8a5cf6", "#43c6dc"];
+    let currentModel = "";   // 当前筛选的模型；空字符串表示全部模型
+    let currentSource = "";  // 当前筛选的来源（项目）；空字符串表示全部来源
+    const trendChart = echarts.init(document.getElementById("trendChart"));
+    const pieChart = echarts.init(document.getElementById("pieChart"));
+
+    function modelQuery() {
+      return currentModel ? ("&model=" + encodeURIComponent(currentModel)) : "";
+    }
+
+    function sourceQuery() {
+      return currentSource ? ("&source=" + encodeURIComponent(currentSource)) : "";
+    }
+
+    async function loadSources() {
+      // 拉取“已接入检测的来源（项目）”列表，填充下拉框（保留当前选择）
+      const res = await fetch(API + "/api/traces/sources");
+      const items = await res.json();
+      const sel = document.getElementById("sourceSelect");
+      const prev = currentSource;
+      sel.innerHTML = '<option value="">全部来源</option>';
+      items.forEach(it => {
+        const opt = document.createElement("option");
+        opt.value = it.source; opt.textContent = it.source + " (" + it.count + ")";
+        sel.appendChild(opt);
+      });
+      if (prev && items.some(it => it.source === prev)) sel.value = prev;
+      else { sel.value = ""; currentSource = ""; }
+    }
+
+    async function loadModels() {
+      // 拉取“已接入检测的模型”列表，填充下拉框（保留当前选择）
+      const res = await fetch(API + "/api/traces/models");
+      const models = await res.json();
+      const sel = document.getElementById("modelSelect");
+      const prev = currentModel;
+      sel.innerHTML = '<option value="">全部模型</option>';
+      models.forEach(m => {
+        const opt = document.createElement("option");
+        opt.value = m; opt.textContent = m;
+        sel.appendChild(opt);
+      });
+      // 若之前的筛选模型仍存在则恢复，否则回退到全部
+      if (prev && models.includes(prev)) sel.value = prev;
+      else { sel.value = ""; currentModel = ""; }
+    }
+
+    function onSourceChange() {
+      currentSource = document.getElementById("sourceSelect").value;
+      loadAll();
+    }
+
+    function onModelChange() {
+      currentModel = document.getElementById("modelSelect").value;
+      loadAll();
+    }
+
+    async function loadPrediction() {
+      const res = await fetch(API + "/api/traces/prediction?days=7" + modelQuery() + sourceQuery());
+      const data = await res.json();
+
+      const dates = data.history.map(h => h.date);
+      const costs = data.history.map(h => +h.cost.toFixed(4));
+      const actual = costs.concat([null]);
+      const predicted = new Array(costs.length).fill(null);
+      predicted[costs.length - 1] = costs[costs.length - 1];
+      predicted.push(+data.predicted_cost.toFixed(4));
+      dates.push(data.predicted_date);
+
+      trendChart.setOption({
+        tooltip: { trigger: "axis", valueFormatter: v => (v == null ? "—" : v) },
+        legend: { data: ["历史成本", "预测成本"], top: 0, textStyle: { color: "#8a94a6" } },
+        grid: { left: 52, right: 22, top: 42, bottom: 46 },
+        xAxis: {
+          type: "category", data: dates, boundaryGap: false,
+          axisLabel: { rotate: 30, color: "#8a94a6" },
+          axisLine: { lineStyle: { color: "#e6e9f2" } }
+        },
+        yAxis: {
+          type: "value", name: "成本", nameTextStyle: { color: "#8a94a6" },
+          axisLabel: { color: "#8a94a6" },
+          splitLine: { lineStyle: { color: "#f0f2f8" } }
+        },
+        series: [
+          {
+            name: "历史成本", type: "line", data: actual, smooth: true, symbolSize: 7,
+            lineStyle: { width: 3, color: "#5b6ee8" }, itemStyle: { color: "#5b6ee8" },
+            areaStyle: {
+              color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+                { offset: 0, color: "rgba(91,110,232,0.28)" },
+                { offset: 1, color: "rgba(91,110,232,0.02)" }
+              ])
+            }
+          },
+          {
+            name: "预测成本", type: "line", data: predicted, smooth: false,
+            symbol: "diamond", symbolSize: 11,
+            lineStyle: { type: "dashed", width: 3, color: "#f5576c" },
+            itemStyle: { color: "#f5576c" }
+          }
+        ]
+      });
+
+      document.getElementById("predictedDate").textContent = data.predicted_date;
+      document.getElementById("predictedCost").textContent = data.predicted_cost.toFixed(4);
+      document.getElementById("threshold").textContent = data.threshold.toFixed(2);
+      document.getElementById("predictedCost").className = data.warning ? "value warning" : "value";
+
+      const banner = document.getElementById("banner");
+      if (data.warning) {
+        banner.className = "banner";
+        banner.style.display = "block";
+        banner.textContent = "⚠️ 预测成本 " + data.predicted_cost.toFixed(4) +
+          " 已超过预算阈值 " + data.threshold.toFixed(2) + "，请注意控制用量。";
+      } else {
+        banner.style.display = "none";
+      }
+    }
+
+    async function loadPie() {
+      const res = await fetch(API + "/api/traces/summary?group_by=model" + modelQuery() + sourceQuery());
+      const data = await res.json();
+      const pieData = data.groups.map(g => ({ name: g.model, value: +g.cost.toFixed(4) }));
+      pieChart.setOption({
+        color: PIE_COLORS,
+        tooltip: { trigger: "item", formatter: "{b}: {c} ({d}%)" },
+        legend: { bottom: 0, textStyle: { color: "#8a94a6" } },
+        series: [{
+          type: "pie", radius: ["42%", "70%"], center: ["50%", "44%"],
+          itemStyle: { borderColor: "#fff", borderWidth: 2, borderRadius: 6 },
+          label: { formatter: "{b}\n{d}%", color: "#1f2a44", fontSize: 12 },
+          labelLine: { length: 10, length2: 12 },
+          data: pieData
+        }]
+      });
+    }
+
+    async function loadTable() {
+      const res = await fetch(API + "/api/traces?limit=20" + modelQuery() + sourceQuery());
+      const rows = await res.json();
+      const body = document.getElementById("traceBody");
+      body.innerHTML = "";
+      rows.forEach(r => {
+        const tr = document.createElement("tr");
+        const cost = r.cost === null ? "—" : r.cost.toFixed(6);
+        const pillCls = r.status === "success" ? "pill-success"
+          : r.status === "error" ? "pill-error" : "pill-timeout";
+        const source = (r.metadata && r.metadata.source) ? r.metadata.source : "unknown";
+        tr.innerHTML =
+          '<td class="model-tag">' + r.model + "</td>" +
+          "<td>" + source + "</td>" +
+          "<td>" + r.input_tokens + "</td>" +
+          "<td>" + r.output_tokens + "</td>" +
+          '<td class="cost">' + cost + "</td>" +
+          "<td>" + r.currency + "</td>" +
+          "<td>" + r.latency_ms + "</td>" +
+          '<td><span class="pill ' + pillCls + '">' + r.status + "</span></td>" +
+          "<td>" + r.timestamp + "</td>";
+        body.appendChild(tr);
+      });
+    }
+
+    async function loadAll() {
+      const banner = document.getElementById("banner");
+      banner.className = "banner";
+      banner.style.display = "none";
+      try {
+        await Promise.all([loadSources(), loadModels(), loadPrediction(), loadPie(), loadTable()]);
+      } catch (e) {
+        banner.className = "banner error";
+        banner.style.display = "block";
+        banner.textContent = "加载数据失败，请确认后端已启动（uvicorn backend.main:app --reload）：" + e;
+      }
+    }
+
+    window.addEventListener("resize", () => {
+      trendChart.resize();
+      pieChart.resize();
+    });
+    loadAll();
+  </script>
+</body>
+</html>

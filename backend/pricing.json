@@ -1,0 +1,17 @@
+{
+  "glm-4-flash": {
+    "input_per_million": 0.1,
+    "output_per_million": 0.2,
+    "currency": "CNY"
+  },
+  "gpt-4o": {
+    "input_per_million": 2.5,
+    "output_per_million": 10.0,
+    "currency": "USD"
+  },
+  "claude-sonnet-4.6": {
+    "input_per_million": 3.0,
+    "output_per_million": 15.0,
+    "currency": "USD"
+  }
+}
