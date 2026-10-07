@@ -13,6 +13,9 @@ agent_lens.db
 # 测试缓存
 .pytest_cache/
 
+# WorkBuddy 本地数据（记忆/配置，不入库）
+.workbuddy/
+
 # 编辑器 / 系统
 .idea/
 .vscode/
